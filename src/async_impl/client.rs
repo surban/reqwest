@@ -75,10 +75,10 @@ pub enum TrustDnsConfig {
     Off,
     /// Enables the trust-dns async resolver using the system resolver configuration.
     #[cfg(feature = "trust-dns")]
-    SystemConfig,
+    System,
     /// Enables the trust-dns async resolver using a custom resolver configuration.
     #[cfg(feature = "trust-dns")]
-    CustomConfig {
+    Custom {
         /// Resolver configuration.
         config: ResolverConfig,
         /// Resolver options.
@@ -170,7 +170,7 @@ impl ClientBuilder {
                 local_address: None,
                 nodelay: true,
                 #[cfg(feature = "trust-dns")]
-                trust_dns: TrustDnsConfig::SystemConfig,
+                trust_dns: TrustDnsConfig::System,
                 #[cfg(not(feature = "trust-dns"))]
                 trust_dns: TrustDnsConfig::Off,
                 #[cfg(feature = "cookies")]
@@ -207,9 +207,9 @@ impl ClientBuilder {
             let http = match config.trust_dns {
                 TrustDnsConfig::Off => HttpConnector::new_gai(),
                 #[cfg(feature = "trust-dns")]
-                TrustDnsConfig::SystemConfig => HttpConnector::new_trust_dns()?,
+                TrustDnsConfig::System => HttpConnector::new_trust_dns()?,
                 #[cfg(feature = "trust-dns")]
-                TrustDnsConfig::CustomConfig {config, opts} => HttpConnector::new_trust_dns_with_config(config, opts),
+                TrustDnsConfig::Custom {config, opts} => HttpConnector::new_trust_dns_with_config(config, opts),
             };
 
             #[cfg(feature = "__tls")]
@@ -906,7 +906,7 @@ impl ClientBuilder {
     #[cfg(feature = "trust-dns")]
     #[deprecated = "use trust_dns_config instead"]
     pub fn trust_dns(self, enable: bool) -> ClientBuilder {
-        self.trust_dns_config(if enable {TrustDnsConfig::SystemConfig} else {TrustDnsConfig::Off})
+        self.trust_dns_config(if enable {TrustDnsConfig::System} else {TrustDnsConfig::Off})
     }
 
     /// Configures the [trust-dns](trust_dns_resolver) async resolver.
