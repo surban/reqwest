@@ -107,7 +107,7 @@ async fn new_resolver(handle: tokio::runtime::Handle) -> Result<SharedResolver, 
         .as_ref()
         .expect("can't construct TrustDnsResolver if SYSTEM_CONF is error")
         .clone();
-    let resolver = AsyncResolver::new(config, opts, handle).await?;
+    let resolver = AsyncResolver::new(config, opts, handle)?;
     Ok(Arc::new(resolver))
 }
 
@@ -116,6 +116,6 @@ async fn new_resolver_with_config(
     config: ResolverConfig,
     opts: ResolverOpts,
 ) -> Result<SharedResolver, BoxError> {
-    let resolver = AsyncResolver::new(config, opts, handle).await?;
+    let resolver = AsyncResolver::new(config, opts, handle)?;
     Ok(Arc::new(resolver))
 }
