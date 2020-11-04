@@ -9,6 +9,8 @@ use native_tls_crate::{TlsConnector, TlsConnectorBuilder};
 use http::header::HeaderValue;
 use futures_util::future::Either;
 use bytes::{Buf, BufMut};
+#[cfg(feature = "trust-dns")]
+use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 
 use std::future::Future;
 use std::io;
@@ -48,6 +50,11 @@ impl HttpConnector {
             .map(Self::TrustDns)
             .map_err(crate::error::builder)
     }
+
+    #[cfg(feature = "trust-dns")]
+    pub(crate) fn new_trust_dns_with_config(config: ResolverConfig, opts: ResolverOpts) -> HttpConnector {
+        Self::TrustDns(hyper::client::HttpConnector::new_with_resolver(TrustDnsResolver::with_config(config, opts)))
+    }    
 }
 
 macro_rules! impl_http_connector {

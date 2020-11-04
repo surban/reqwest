@@ -18,7 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 use super::request::{Request, RequestBuilder};
 use super::response::Response;
 use super::wait;
-use crate::{async_impl, header, IntoUrl, Method, Proxy, redirect};
+use crate::{IntoUrl, Method, Proxy, async_impl::{self, client::TrustDnsConfig}, header, redirect};
 #[cfg(feature = "__tls")]
 use crate::{Certificate, Identity};
 
@@ -514,7 +514,9 @@ impl ClientBuilder {
         self.with_inner(move |inner| inner.use_preconfigured_tls(tls))
     }
 
-    /// Enables the [trust-dns](trust_dns_resolver) async resolver instead of a default threadpool using `getaddrinfo`.
+    /// Enables the [trust-dns](trust_dns_resolver) async resolver 
+    /// using the system's resolver configuration instead of a default threadpool 
+    /// using `getaddrinfo`.
     ///
     /// If the `trust-dns` feature is turned on, the default option is enabled.
     ///
@@ -522,8 +524,22 @@ impl ClientBuilder {
     ///
     /// This requires the optional `trust-dns` feature to be enabled
     #[cfg(feature = "trust-dns")]
+    #[deprecated = "use trust_dns_config instead"]
     pub fn trust_dns(self, enable: bool) -> ClientBuilder {
+        #[allow(deprecated)]
         self.with_inner(|inner| inner.trust_dns(enable))
+    }
+
+    /// Configures the [trust-dns](trust_dns_resolver) async resolver.
+    ///
+    /// If the `trust-dns` feature is turned on, the default option is enabled.
+    ///
+    /// # Optional
+    ///
+    /// This requires the optional `trust-dns` feature to be enabled
+    #[cfg(feature = "trust-dns")]
+    pub fn trust_dns_config(self, config: TrustDnsConfig) -> ClientBuilder {
+        self.with_inner(|inner| inner.trust_dns_config(config))
     }
 
     /// Disables the trust-dns async resolver.

@@ -1,7 +1,4 @@
-#[cfg(any(
-    feature = "native-tls",
-    feature = "rustls-tls",
-))]
+#[cfg(any(feature = "native-tls", feature = "rustls-tls",))]
 use std::any::Any;
 use std::convert::TryInto;
 use std::net::IpAddr;
@@ -25,6 +22,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::time::Delay;
+#[cfg(feature = "trust-dns")]
+use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 
 use log::debug;
 
@@ -68,6 +67,25 @@ pub struct ClientBuilder {
     config: Config,
 }
 
+/// Trust-dns async resolver configuration.
+#[derive(Debug, Clone)]
+pub enum TrustDnsConfig {
+    /// Disable the trust-dns async resolver and perform lookups using a default threadpool 
+    /// using `getaddrinfo`.
+    Off,
+    /// Enables the trust-dns async resolver using the system resolver configuration.
+    #[cfg(feature = "trust-dns")]
+    SystemConfig,
+    /// Enables the trust-dns async resolver using a custom resolver configuration.
+    #[cfg(feature = "trust-dns")]
+    CustomConfig {
+        /// Resolver configuration.
+        config: ResolverConfig,
+        /// Resolver options.
+        opts: ResolverOpts,
+    },
+}
+
 struct Config {
     // NOTE: When adding a new field, update `fmt::Debug for ClientBuilder`
     accepts: Accepts,
@@ -101,7 +119,7 @@ struct Config {
     nodelay: bool,
     #[cfg(feature = "cookies")]
     cookie_store: Option<cookie::CookieStore>,
-    trust_dns: bool,
+    trust_dns: TrustDnsConfig,
     error: Option<crate::Error>,
 }
 
@@ -151,7 +169,10 @@ impl ClientBuilder {
                 http2_initial_connection_window_size: None,
                 local_address: None,
                 nodelay: true,
-                trust_dns: cfg!(feature = "trust-dns"),
+                #[cfg(feature = "trust-dns")]
+                trust_dns: TrustDnsConfig::SystemConfig,
+                #[cfg(not(feature = "trust-dns"))]
+                trust_dns: TrustDnsConfig::Off,
                 #[cfg(feature = "cookies")]
                 cookie_store: None,
             },
@@ -184,11 +205,11 @@ impl ClientBuilder {
             }
 
             let http = match config.trust_dns {
-                false => HttpConnector::new_gai(),
+                TrustDnsConfig::Off => HttpConnector::new_gai(),
                 #[cfg(feature = "trust-dns")]
-                true => HttpConnector::new_trust_dns()?,
-                #[cfg(not(feature = "trust-dns"))]
-                true => unreachable!("trust-dns shouldn't be enabled unless the feature is"),
+                TrustDnsConfig::SystemConfig => HttpConnector::new_trust_dns()?,
+                #[cfg(feature = "trust-dns")]
+                TrustDnsConfig::CustomConfig {config, opts} => HttpConnector::new_trust_dns_with_config(config, opts),
             };
 
             #[cfg(feature = "__tls")]
@@ -215,7 +236,6 @@ impl ClientBuilder {
                         }
                     }
 
-
                     Connector::new_default_tls(
                         http,
                         tls,
@@ -224,27 +244,25 @@ impl ClientBuilder {
                         config.local_address,
                         config.nodelay,
                     )?
-                },
+                }
                 #[cfg(feature = "native-tls")]
-                TlsBackend::BuiltNativeTls(conn) => {
-                    Connector::from_built_default_tls(
-                        http,
-                        conn,
-                        proxies.clone(),
-                        user_agent(&config.headers),
-                        config.local_address,
-                        config.nodelay)
-                },
+                TlsBackend::BuiltNativeTls(conn) => Connector::from_built_default_tls(
+                    http,
+                    conn,
+                    proxies.clone(),
+                    user_agent(&config.headers),
+                    config.local_address,
+                    config.nodelay,
+                ),
                 #[cfg(feature = "rustls-tls")]
-                TlsBackend::BuiltRustls(conn) => {
-                    Connector::new_rustls_tls(
-                        http,
-                        conn,
-                        proxies.clone(),
-                        user_agent(&config.headers),
-                        config.local_address,
-                        config.nodelay)
-                },
+                TlsBackend::BuiltRustls(conn) => Connector::new_rustls_tls(
+                    http,
+                    conn,
+                    proxies.clone(),
+                    user_agent(&config.headers),
+                    config.local_address,
+                    config.nodelay,
+                ),
                 #[cfg(feature = "rustls-tls")]
                 TlsBackend::Rustls => {
                     use crate::tls::NoVerifier;
@@ -279,16 +297,13 @@ impl ClientBuilder {
                         config.local_address,
                         config.nodelay,
                     )
-                },
-                #[cfg(any(
-                    feature = "native-tls",
-                    feature = "rustls-tls",
-                ))]
+                }
+                #[cfg(any(feature = "native-tls", feature = "rustls-tls",))]
                 TlsBackend::UnknownPreconfigured => {
                     return Err(crate::error::builder(
-                        "Unknown TLS backend passed to `use_preconfigured_tls`"
+                        "Unknown TLS backend passed to `use_preconfigured_tls`",
                     ));
-                },
+                }
             }
 
             #[cfg(not(feature = "__tls"))]
@@ -721,8 +736,8 @@ impl ClientBuilder {
     ///
     /// Default is 60 seconds.
     pub fn tcp_keepalive<D>(mut self, val: D) -> ClientBuilder
-        where
-            D: Into<Option<Duration>>,
+    where
+        D: Into<Option<Duration>>,
     {
         self.config.tcp_keepalive = val.into();
         self
@@ -848,15 +863,14 @@ impl ClientBuilder {
     ///
     /// This requires one of the optional features `native-tls` or
     /// `rustls-tls` to be enabled.
-    #[cfg(any(
-        feature = "native-tls",
-        feature = "rustls-tls",
-    ))]
+    #[cfg(any(feature = "native-tls", feature = "rustls-tls",))]
     pub fn use_preconfigured_tls(mut self, tls: impl Any) -> ClientBuilder {
         let mut tls = Some(tls);
         #[cfg(feature = "native-tls")]
         {
-            if let Some(conn) = (&mut tls as &mut dyn Any).downcast_mut::<Option<native_tls_crate::TlsConnector>>() {
+            if let Some(conn) =
+                (&mut tls as &mut dyn Any).downcast_mut::<Option<native_tls_crate::TlsConnector>>()
+            {
                 let tls = conn.take().expect("is definitely Some");
                 let tls = crate::tls::TlsBackend::BuiltNativeTls(tls);
                 self.config.tls = tls;
@@ -865,8 +879,9 @@ impl ClientBuilder {
         }
         #[cfg(feature = "rustls-tls")]
         {
-            if let Some(conn) = (&mut tls as &mut dyn Any).downcast_mut::<Option<rustls::ClientConfig>>() {
-
+            if let Some(conn) =
+                (&mut tls as &mut dyn Any).downcast_mut::<Option<rustls::ClientConfig>>()
+            {
                 let tls = conn.take().expect("is definitely Some");
                 let tls = crate::tls::TlsBackend::BuiltRustls(tls);
                 self.config.tls = tls;
@@ -879,7 +894,9 @@ impl ClientBuilder {
         self
     }
 
-    /// Enables the [trust-dns](trust_dns_resolver) async resolver instead of a default threadpool using `getaddrinfo`.
+    /// Enables the [trust-dns](trust_dns_resolver) async resolver 
+    /// using the system's resolver configuration instead of a default threadpool 
+    /// using `getaddrinfo`.
     ///
     /// If the `trust-dns` feature is turned on, the default option is enabled.
     ///
@@ -887,8 +904,21 @@ impl ClientBuilder {
     ///
     /// This requires the optional `trust-dns` feature to be enabled
     #[cfg(feature = "trust-dns")]
-    pub fn trust_dns(mut self, enable: bool) -> ClientBuilder {
-        self.config.trust_dns = enable;
+    #[deprecated = "use trust_dns_config instead"]
+    pub fn trust_dns(self, enable: bool) -> ClientBuilder {
+        self.trust_dns_config(if enable {TrustDnsConfig::SystemConfig} else {TrustDnsConfig::Off})
+    }
+
+    /// Configures the [trust-dns](trust_dns_resolver) async resolver.
+    ///
+    /// If the `trust-dns` feature is turned on, the default option is enabled.
+    ///
+    /// # Optional
+    ///
+    /// This requires the optional `trust-dns` feature to be enabled
+    #[cfg(feature = "trust-dns")]
+    pub fn trust_dns_config(mut self, config: TrustDnsConfig) -> ClientBuilder {
+        self.config.trust_dns = config;
         self
     }
 
@@ -900,7 +930,7 @@ impl ClientBuilder {
     pub fn no_trust_dns(self) -> ClientBuilder {
         #[cfg(feature = "trust-dns")]
         {
-            self.trust_dns(false)
+            self.trust_dns_config(TrustDnsConfig::Off)
         }
 
         #[cfg(not(feature = "trust-dns"))]
@@ -1361,8 +1391,8 @@ impl Future for PendingRequest {
                         .map(|cookie| cookie.into_inner().into_owned())
                         .peekable();
                     if cookies.peek().is_some() {
-                      let mut store = store_wrapper.write().unwrap();
-                      store.0.store_response_cookies(cookies, &self.url);
+                        let mut store = store_wrapper.write().unwrap();
+                        store.0.store_response_cookies(cookies, &self.url);
                     }
                 }
             }
